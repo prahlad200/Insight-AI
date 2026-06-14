@@ -231,7 +231,7 @@ with st.sidebar:
     try:
         # If the app is in the cloud, silently use the secure vault
         st.session_state.gemini_api_key = st.secrets["GEMINI_API_KEY"]
-        st.success("API Connection: Secure & Active 🟢")
+        st.success("API Connection: Secure & Active")
     except Exception:
         # If running locally without secrets, show the manual input box
         saved_key = st.text_input(
