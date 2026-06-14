@@ -1,0 +1,9 @@
+# Ignore local databases and indexes
+insights.db
+insights.index
+insights_map.txt
+
+# Ignore virtual environment and cache
+.venv/
+__pycache__/
+.DS_Store

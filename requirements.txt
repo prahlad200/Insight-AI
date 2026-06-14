@@ -1,0 +1,10 @@
+streamlit
+requests
+pandas
+transformers
+torch
+plotly
+google-generativeai
+sentence-transformers
+faiss-cpu
+numpy
