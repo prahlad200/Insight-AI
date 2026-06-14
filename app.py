@@ -227,22 +227,20 @@ with st.sidebar:
         
     st.markdown("---")
     
-    # Safely try to fetch the Cloud API Key, ignore error if testing locally
-    cloud_key = ""
+    # --- ENTERPRISE SECURITY LOGIC ---
     try:
-        cloud_key = st.secrets["GEMINI_API_KEY"]
+        # If the app is in the cloud, silently use the secure vault
+        st.session_state.gemini_api_key = st.secrets["GEMINI_API_KEY"]
+        st.success("API Connection: Secure & Active 🟢")
     except Exception:
-        pass
-
-    saved_key = st.text_input(
-        "Gemini API Key", 
-        value=cloud_key or st.session_state.gemini_api_key, 
-        type="password", 
-        help="Saved securely for this session."
-    )
-    
-    if saved_key != st.session_state.gemini_api_key:
-        st.session_state.gemini_api_key = saved_key
+        # If running locally without secrets, show the manual input box
+        saved_key = st.text_input(
+            "Gemini API Key (Local Testing)", 
+            value=st.session_state.gemini_api_key, 
+            type="password"
+        )
+        if saved_key != st.session_state.gemini_api_key:
+            st.session_state.gemini_api_key = saved_key
         
     st.markdown("---")
     
