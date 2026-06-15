@@ -1,0 +1,6 @@
+[theme]
+primaryColor = "#F8DF72" 
+backgroundColor = "#121212"
+secondaryBackgroundColor = "#000000"
+textColor = "#FFFFFF"
+font = "monospace"
