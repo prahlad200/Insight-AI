@@ -13,20 +13,54 @@ import concurrent.futures
 import plotly.express as px
 import plotly.graph_objects as go
 import google.generativeai as genai
+try:
+    from openai import OpenAI
+except ImportError:
+    pass
 
 # --- 1. MODERN THEME & INTERACTIVE UI CONFIGURATION ---
 st.set_page_config(page_title="InsightAI | Tech Sentiment Platform", page_icon="🧠", layout="wide", initial_sidebar_state="expanded")
 
 st.markdown("""
     <style>
+    /* 1. Flat, stark metric cards like code windows */
     div[data-testid="metric-container"] {
-        background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08);
-        padding: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-        transition: transform 0.2s ease, border-color 0.2s ease;
+        background-color: #1A1A1A; 
+        border: 1px solid #333333;
+        padding: 20px; 
+        border-radius: 8px; 
+        box-shadow: none;
+        transition: border-color 0.3s ease;
     }
-    div[data-testid="metric-container"]:hover { transform: translateY(-2px); border-color: rgba(255, 255, 255, 0.2); }
-    [data-testid="stMetricSimpleValue"] { font-size: 2.2rem; font-weight: 800; letter-spacing: -0.5px; }
-    .stButton>button { width: 100%; border-radius: 8px; font-weight: 600; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+    /* 2. Hover effect mimicking Carbon's yellow logo */
+    div[data-testid="metric-container"]:hover { 
+        border-color: #F8DF72; 
+    }
+    /* 3. Sleek, thin borders for input fields */
+    .stTextInput>div>div>input {
+        background-color: #1A1A1A;
+        border: 1px solid #333333;
+        color: #FFFFFF;
+    }
+    /* 4. Sharp, terminal-style buttons */
+    .stButton>button { 
+        width: 100%; 
+        border-radius: 6px; 
+        font-weight: 600; 
+        background-color: #000000;
+        border: 1px solid #333333;
+        transition: all 0.2s ease; 
+    }
+    .stButton>button:hover {
+        border-color: #F8DF72;
+        color: #F8DF72;
+        background-color: #1A1A1A;
+    }
+    /* 5. Customizing the metric numbers */
+    [data-testid="stMetricSimpleValue"] { 
+        font-size: 2.5rem; 
+        font-weight: 400; 
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -91,7 +125,6 @@ def save_to_database(df_records, query_used):
         """, (current_time, query_used if query_used.strip() else "Global Top Stories", row["Headline"], row["Headline Vibe"], row["Top Community Comment"], row["Comment Vibe"], row["Comment Emotion"], row["Raw_Confidence"]))
     conn.commit()
     conn.close()
-    # Update index on disk immediately after new data arrives
     build_and_save_vector_index()
 
 def register_user(username, password):
@@ -135,7 +168,9 @@ init_db()
 if "active_data" not in st.session_state: st.session_state.active_data = None
 if "current_query" not in st.session_state: st.session_state.current_query = "None (Awaiting Execution)"
 if "logged_in_user" not in st.session_state: st.session_state.logged_in_user = None
-if "gemini_api_key" not in st.session_state: st.session_state.gemini_api_key = ""
+if "llm_provider" not in st.session_state: st.session_state.llm_provider = "Google Gemini"
+if "llm_model" not in st.session_state: st.session_state.llm_model = "gemini-2.5-flash"
+if "llm_api_key" not in st.session_state: st.session_state.llm_api_key = ""
 
 # --- 4. USER GATEKEEPER LAYER (LOGIN) ---
 if st.session_state.logged_in_user is None:
@@ -222,25 +257,46 @@ with st.sidebar:
     
     if st.button("Log Out"):
         st.session_state.logged_in_user = None
-        st.session_state.gemini_api_key = "" 
+        st.session_state.llm_api_key = "" 
         st.rerun()
         
     st.markdown("---")
     
-    # --- ENTERPRISE SECURITY LOGIC ---
+    # --- DYNAMIC MULTI-LLM PROVIDER CONFIGURATOR ---
+    st.markdown("### 🔑 AI Framework Configuration")
+    
+    chosen_provider = st.selectbox(
+        "Framework Engine:",
+        ["Google Gemini", "OpenAI"],
+        index=0 if st.session_state.llm_provider == "Google Gemini" else 1
+    )
+    st.session_state.llm_provider = chosen_provider
+    
+    if chosen_provider == "Google Gemini":
+        model_options = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash"]
+    else:
+        model_options = ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"]
+        
     try:
-        # If the app is in the cloud, silently use the secure vault
-        st.session_state.gemini_api_key = st.secrets["GEMINI_API_KEY"]
-        st.success("API Connection: Secure & Active")
+        current_model_idx = model_options.index(st.session_state.llm_model)
+    except ValueError:
+        current_model_idx = 0
+        
+    chosen_model = st.selectbox("Model Architecture:", model_options, index=current_model_idx)
+    st.session_state.llm_model = chosen_model
+    
+    secret_key_name = "GEMINI_API_KEY" if chosen_provider == "Google Gemini" else "OPENAI_API_KEY"
+    try:
+        st.session_state.llm_api_key = st.secrets[secret_key_name]
+        st.success("API Connection: Vault Active")
     except Exception:
-        # If running locally without secrets, show the manual input box
         saved_key = st.text_input(
-            "Gemini API Key (Local Testing)", 
-            value=st.session_state.gemini_api_key, 
+            f"{chosen_provider} API Key:", 
+            value=st.session_state.llm_api_key, 
             type="password"
         )
-        if saved_key != st.session_state.gemini_api_key:
-            st.session_state.gemini_api_key = saved_key
+        if saved_key != st.session_state.llm_api_key:
+            st.session_state.llm_api_key = saved_key
         
     st.markdown("---")
     
@@ -316,7 +372,6 @@ if app_mode == "📡 Live Dashboard":
     if st.session_state.active_data is not None:
         raw_df = st.session_state.active_data
         
-        # --- OPTIMIZATION 3: DYNAMIC DASHBOARD FILTERING ---
         st.markdown("### 🔍 Interactive Stream Filters")
         f_col1, f_col2 = st.columns(2)
         with f_col1:
@@ -326,7 +381,6 @@ if app_mode == "📡 Live Dashboard":
             emotion_opts = ["All Emotions"] + list(raw_df['Comment Emotion'].unique())
             selected_emotion = st.selectbox("Filter by Emotion Matrix:", emotion_opts)
             
-        # Apply filters seamlessly
         df = raw_df.copy()
         if selected_vibe != "All Vibes":
             df = df[df['Comment Vibe'] == selected_vibe]
@@ -343,25 +397,38 @@ if app_mode == "📡 Live Dashboard":
             
             st.markdown("---")
             c1, c2 = st.columns(2)
+            
+            carbon_palette = ['#82AAFF', '#C792EA', '#F07178', '#C3E88D', '#FFCB6B']
+            
             with c1:
                 st.subheader("Sentiment Distribution")
+                st.caption("Shows macro-level community consensus by categorizing unstructured text into Positive, Neutral, or Negative buckets.")
                 sentiment_counts = df['Comment Vibe'].value_counts().reset_index()
                 sentiment_counts.columns = ['Sentiment', 'Frequency']
-                fig_sent = px.bar(sentiment_counts, x='Sentiment', y='Frequency', color='Sentiment', template='plotly_dark')
+                fig_sent = px.bar(
+                    sentiment_counts, x='Sentiment', y='Frequency', color='Sentiment', 
+                    template='plotly_dark',
+                    color_discrete_sequence=carbon_palette
+                )
                 fig_sent.update_layout(showlegend=False, margin=dict(l=20, r=20, t=20, b=20), height=300)
                 st.plotly_chart(fig_sent, use_container_width=True)
                 
             with c2:
                 st.subheader("Emotion Matrix")
+                st.caption("Provides semantic depth by isolating the exact psychological drivers (e.g., Fear, Joy) behind the community's reaction.")
                 emotion_counts = df['Comment Emotion'].value_counts().reset_index()
                 emotion_counts.columns = ['Emotion', 'Frequency']
-                fig_emo = px.bar(emotion_counts, x='Emotion', y='Frequency', color='Emotion', template='plotly_dark')
+                fig_emo = px.bar(
+                    emotion_counts, x='Emotion', y='Frequency', color='Emotion', 
+                    template='plotly_dark',
+                    color_discrete_sequence=carbon_palette
+                )
                 fig_emo.update_layout(showlegend=False, margin=dict(l=20, r=20, t=20, b=20), height=300)
                 st.plotly_chart(fig_emo, use_container_width=True)
                 
-            # --- FEATURE: PREDICTIVE TREND FORECASTING ---
             st.markdown("---")
             st.subheader("📈 Predictive Sentiment Trend Analysis")
+            st.caption("Projects future sentiment trajectory by calculating the average rate of variance change across the chronological data sequence.")
             
             vibe_map = {"Positive": 1.0, "Neutral": 0.0, "Negative": -1.0}
             numerical_vibes = df['Comment Vibe'].map(vibe_map).tolist()
@@ -370,7 +437,7 @@ if app_mode == "📡 Live Dashboard":
                 steps = list(range(1, len(numerical_vibes) + 1))
                 
                 fig_trend = go.Figure()
-                fig_trend.add_trace(go.Scatter(x=steps, y=numerical_vibes, mode='lines+markers', name='Observed Vibe Index'))
+                fig_trend.add_trace(go.Scatter(x=steps, y=numerical_vibes, mode='lines+markers', name='Observed Vibe Index', line=dict(color='#82AAFF')))
                 
                 last_val = numerical_vibes[-1]
                 avg_delta = np.mean(np.diff(numerical_vibes)) if len(numerical_vibes) > 1 else 0
@@ -381,7 +448,7 @@ if app_mode == "📡 Live Dashboard":
                 proj_steps = [steps[-1]] + future_steps
                 proj_vals = [numerical_vibes[-1]] + future_vals
                 
-                fig_trend.add_trace(go.Scatter(x=proj_steps, y=proj_vals, mode='lines+markers', line=dict(dash='dash'), name='Predictive Forecast Trajectory'))
+                fig_trend.add_trace(go.Scatter(x=proj_steps, y=proj_vals, mode='lines+markers', line=dict(dash='dash', color='#FFCB6B'), name='Predictive Forecast Trajectory'))
                 fig_trend.update_layout(
                     template='plotly_dark',
                     yaxis=dict(tickmode='array', tickvals=[-1, 0, 1], ticktext=['Negative', 'Neutral', 'Positive']),
@@ -394,19 +461,40 @@ if app_mode == "📡 Live Dashboard":
                 
             st.markdown("---")
             st.subheader("Multivariate Cross-Correlation")
+            st.caption("Statistical validation matrix checking for conceptual alignment between the independent Sentiment and Emotion AI models.")
             st.dataframe(pd.crosstab(df['Comment Vibe'], df['Comment Emotion']), use_container_width=True)
     else:
         st.info("Awaiting pipeline execution. Use the left sidebar to configure your target and launch the scraper.")
 
 elif app_mode == "📝 Raw Data Feed":
     st.header("Raw Stream Content Ledger")
+    st.caption("This ledger represents the real-time, unstructured data scraped from the Hacker News API, appended with the immediate outputs of our local HuggingFace NLP pipelines. It serves as the manual audit layer before vectorization.")
+    
     if st.session_state.active_data is not None:
-        st.dataframe(st.session_state.active_data.drop(columns=['Raw_Confidence']), use_container_width=True, height=600)
+        raw_df = st.session_state.active_data
+        
+        st.markdown("### 📊 Current Scrape Telemetry")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Target Keyword", st.session_state.current_query)
+        m2.metric("Nodes Extracted", len(raw_df))
+        
+        dominant_vibe = raw_df['Comment Vibe'].mode()[0] if not raw_df.empty else "N/A"
+        m3.metric("Dominant Text Vibe", dominant_vibe)
+        
+        st.markdown("---")
+        
+        st.dataframe(
+            raw_df.drop(columns=['Raw_Confidence']), 
+            use_container_width=True, 
+            height=500,
+            hide_index=True 
+        )
     else:
         st.info("No active data in memory. Execute a pipeline run from the sidebar.")
 
 elif app_mode == "🗄️ Historical Warehouse":
     st.header("Relational Infrastructure Browser")
+    st.caption("This tab accesses the persistent SQLite database (`insights.db`). This tabular data acts as the ground-truth relational mapping for the mathematical FAISS vector index used by the RAG engine.")
     
     col_ctrl1, col_ctrl2 = st.columns([1, 5])
     with col_ctrl1:
@@ -416,7 +504,6 @@ elif app_mode == "🗄️ Historical Warehouse":
             conn.commit()
             conn.close()
             st.session_state.active_data = None 
-            # Clear disk index files safely
             if os.path.exists(FAISS_INDEX_FILE): os.remove(FAISS_INDEX_FILE)
             if os.path.exists(MAP_FILE): os.remove(MAP_FILE)
             st.success("Database cleared successfully!")
@@ -428,7 +515,32 @@ elif app_mode == "🗄️ Historical Warehouse":
         conn = sqlite3.connect(DB_FILE)
         history_df = pd.read_sql_query("SELECT * FROM ai_insights ORDER BY id DESC", conn)
         conn.close()
+        
         if not history_df.empty:
+            
+            st.markdown("### 📈 Warehouse Telemetry")
+            hm1, hm2, hm3 = st.columns(3)
+            hm1.metric("Total Archived Records", len(history_df))
+            hm2.metric("Unique Topics Tracked", history_df['search_query'].nunique())
+            
+            latest_time = history_df['timestamp'].max()
+            time_only = latest_time.split(" ")[1] if isinstance(latest_time, str) else "N/A"
+            hm3.metric("Last Database Write", time_only)
+            
+            st.markdown("<br>", unsafe_allow_html=True)
+            topic_counts = history_df['search_query'].value_counts().reset_index()
+            topic_counts.columns = ['Tracked Topic', 'Volume of Records']
+            fig_history = px.bar(
+                topic_counts, x='Tracked Topic', y='Volume of Records', 
+                template='plotly_dark',
+                color_discrete_sequence=['#C792EA'] 
+            )
+            fig_history.update_layout(margin=dict(l=20, r=20, t=20, b=20), height=250)
+            st.plotly_chart(fig_history, use_container_width=True)
+            
+            st.markdown("---")
+            st.markdown("### 🗃️ Raw SQLite Ledger")
+            
             csv_payload = history_df.to_csv(index=False).encode('utf-8')
             st.download_button(
                 label="📥 Export Warehouse to CSV",
@@ -437,8 +549,7 @@ elif app_mode == "🗄️ Historical Warehouse":
                 mime="text/csv"
             )
             
-            st.metric("Total Archived Records", len(history_df))
-            st.dataframe(history_df, use_container_width=True, height=600)
+            st.dataframe(history_df, use_container_width=True, height=400, hide_index=True)
         else:
             st.info("Database is initialized but currently empty.")
     except Exception as e:
@@ -447,7 +558,7 @@ elif app_mode == "🗄️ Historical Warehouse":
 elif app_mode == "💬 AI Data Analyst":
     col1, col2 = st.columns([4, 1])
     with col1:
-        st.header("💬 Talk to Your Data")
+        st.header("💬 Intelligence Console (RAG)")
     with col2:
         if st.button("🗑️ Clear History"):
             conn = sqlite3.connect(DB_FILE)
@@ -456,13 +567,38 @@ elif app_mode == "💬 AI Data Analyst":
             conn.close()
             st.rerun()
             
-    if st.session_state.gemini_api_key:
-        genai.configure(api_key=st.session_state.gemini_api_key)
-        model = genai.GenerativeModel('gemini-2.5-flash')
+    st.caption("This interface bypasses standard LLM hallucinations. It embeds your query into a mathematical vector, searches the local FAISS index for the nearest semantic matches, and forces the selected AI model to synthesize an answer strictly from your scraped historical data.")
+    st.markdown("---")
+            
+    if st.session_state.llm_api_key:
+        if st.session_state.llm_provider == "Google Gemini":
+            genai.configure(api_key=st.session_state.llm_api_key)
+            model_engine = genai.GenerativeModel(st.session_state.llm_model)
+        else:
+            openai_client = OpenAI(api_key=st.session_state.llm_api_key)
         
         conn = sqlite3.connect(DB_FILE)
         history_df = pd.read_sql_query("SELECT role, content FROM chat_sessions WHERE username = ? ORDER BY id ASC", conn, params=(st.session_state.logged_in_user,))
         conn.close()
+        
+        # --- NEW: Enterprise "Empty State" Terminal UI ---
+        if history_df.empty:
+            st.markdown(f"""
+            <div style='background-color: #1A1A1A; padding: 30px; border-radius: 8px; border: 1px solid #333333; text-align: center; margin-bottom: 20px;'>
+                <h2 style='color: #F8DF72; margin-top: 0; font-family: monospace;'>System Online: Ready for Query</h2>
+                <p style='color: #888888; font-family: monospace; font-size: 1.1rem;'>
+                    [ Database ]: insights.index (FAISS)<br>
+                    [ AI Engine ]: {st.session_state.llm_provider} ({st.session_state.llm_model})
+                </p>
+                <hr style='border-color: #333; margin: 20px 0;'>
+                <p style='color: #FFFFFF; font-size: 1.1rem;'>The RAG engine is primed. Try asking a question about your ingested data:</p>
+                <ul style='list-style-type: none; padding: 0; color: #82AAFF; font-family: monospace; font-size: 1.1rem;'>
+                    <li>> "What are the main complaints regarding the latest release?"</li>
+                    <li>> "Summarize the positive feedback from the community."</li>
+                    <li>> "Are there any mentions of security vulnerabilities?"</li>
+                </ul>
+            </div>
+            """, unsafe_allow_html=True)
         
         for _, msg in history_df.iterrows():
             with st.chat_message(msg["role"]):
@@ -481,7 +617,6 @@ elif app_mode == "💬 AI Data Analyst":
             conn.close()
             
             with st.chat_message("assistant"):
-                # --- OPTIMIZATION 2: FAISS VECTOR PERSISTENCE LOAD ---
                 if not os.path.exists(FAISS_INDEX_FILE) or not os.path.exists(MAP_FILE):
                     with st.spinner("Compiling structural database index on disk..."):
                         build_and_save_vector_index()
@@ -510,13 +645,22 @@ elif app_mode == "💬 AI Data Analyst":
                         User Question: "{user_question}"
                         """
                         
-                        # --- OPTIMIZATION 1: REAL-TIME LLM STREAMING ---
-                        def stream_gemini_response():
-                            response_stream = model.generate_content(prompt, stream=True)
-                            for chunk in response_stream:
-                                yield chunk.text
+                        def stream_llm_response():
+                            if st.session_state.llm_provider == "Google Gemini":
+                                response_stream = model_engine.generate_content(prompt, stream=True)
+                                for chunk in response_stream:
+                                    yield chunk.text
+                            elif st.session_state.llm_provider == "OpenAI":
+                                response_stream = openai_client.chat.completions.create(
+                                    model=st.session_state.llm_model,
+                                    messages=[{"role": "user", "content": prompt}],
+                                    stream=True
+                                )
+                                for chunk in response_stream:
+                                    if chunk.choices[0].delta.content:
+                                        yield chunk.choices[0].delta.content
                                 
-                        output_text = st.write_stream(stream_gemini_response())
+                        output_text = st.write_stream(stream_llm_response())
                         
                         with st.expander("🔍 Review Explanatory Vector Retrieval Sources"):
                             st.write("The pre-computed FAISS index instantly pulled these vector references from disk:")
@@ -534,4 +678,4 @@ elif app_mode == "💬 AI Data Analyst":
                 else:
                     st.warning("Data repository is currently dry. Populate it first via the pipeline.")
     else:
-        st.warning("⚠️ Please provide a valid Gemini API Key in the sidebar to activate the AI framework.")
+        st.warning(f"⚠️ Please provide a valid API Key in the sidebar to activate the {st.session_state.llm_provider} framework.")
